@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PublicLoginPage extends StatefulWidget {
   const PublicLoginPage({super.key});
@@ -12,6 +14,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _obscure = true;
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -47,6 +50,89 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
     );
   }
 
+  Future<void> _login() async {
+    final email = _email.text.trim();
+    final pw = _password.text;
+
+    if (email.isEmpty || pw.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter email and password')),
+      );
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      final cred = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: pw);
+
+      final uid = cred.user!.uid;
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+
+      if (!userDoc.exists) {
+        await FirebaseAuth.instance.signOut();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Account not registered in our database.'),
+          ),
+        );
+        setState(() => _loading = false);
+        return;
+      }
+
+      if (!mounted) return;
+      context.go('/streams');
+    } on FirebaseAuthException catch (e) {
+      String msg;
+      switch (e.code) {
+        case 'user-not-found':
+          msg = 'No account found for that email.';
+          break;
+        case 'wrong-password':
+          msg = 'Incorrect password.';
+          break;
+        case 'invalid-email':
+          msg = 'Invalid email address.';
+          break;
+        case 'user-disabled':
+          msg = 'This account has been disabled.';
+          break;
+        case 'network-request-failed':
+          msg = 'Network error. Please try again.';
+          break;
+        default:
+          msg = 'Login failed: ${e.message ?? e.code}';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _forgotPassword() async {
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email first')),
+      );
+      return;
+    }
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password reset email sent')),
+      );
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message ?? e.code)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -59,25 +145,17 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
             child: Container(
               padding: const EdgeInsets.fromLTRB(24, 40, 24, 28),
               decoration: BoxDecoration(
-                color: const Color(0xFF0A33FF), // deep blue
+                color: const Color(0xFF0A33FF),
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: const Color(0xFF18E0DC), // aqua edge
-                  width: 1.2,
-                ),
+                border: Border.all(color: const Color(0xFF18E0DC), width: 1.2),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Header: Public / Private
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _HeaderTab(
-                        label: 'Public',
-                        selected: true,
-                        onTap: () {}, // already here
-                      ),
+                      _HeaderTab(label: 'Public', selected: true, onTap: () {}),
                       _HeaderTab(
                         label: 'Private',
                         selected: false,
@@ -87,7 +165,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                   ),
                   const SizedBox(height: 28),
 
-                  // Email
                   TextField(
                     controller: _email,
                     keyboardType: TextInputType.emailAddress,
@@ -97,10 +174,10 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       label: 'EMAIL',
                       prefix: Icons.person_outline,
                     ),
+                    onSubmitted: (_) => _login(),
                   ),
                   const SizedBox(height: 16),
 
-                  // Password
                   TextField(
                     controller: _password,
                     obscureText: _obscure,
@@ -118,11 +195,11 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                         tooltip: _obscure ? 'Show' : 'Hide',
                       ),
                     ),
+                    onSubmitted: (_) => _login(),
                   ),
 
                   const SizedBox(height: 36),
 
-                  // Login button
                   SizedBox(
                     width: double.infinity,
                     height: 48,
@@ -138,26 +215,29 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                           fontStyle: FontStyle.italic,
                         ),
                       ),
-                      onPressed: () => context.go('/streams'),
-
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.login),
-                          SizedBox(width: 12),
-                          Text('login'),
-                        ],
-                      ),
+                      onPressed: _loading ? null : _login,
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22, height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.login),
+                                SizedBox(width: 12),
+                                Text('login'),
+                              ],
+                            ),
                     ),
                   ),
 
                   const SizedBox(height: 8),
 
-                  // Forgot password
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: () {},
+                      onPressed: _loading ? null : _forgotPassword,
                       child: const Text(
                         'FORGOT PASSWORD',
                         style: TextStyle(

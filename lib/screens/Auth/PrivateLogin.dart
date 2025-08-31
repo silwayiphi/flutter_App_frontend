@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PrivateLoginPage extends StatefulWidget {
   const PrivateLoginPage({super.key});
@@ -12,6 +14,7 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
   final _email = TextEditingController();
   final _key = TextEditingController();
   bool _obscure = true;
+  bool _loading = false;
 
   @override
   void dispose() {
@@ -47,6 +50,69 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
     );
   }
 
+  Future<void> _login() async {
+    final email = _email.text.trim();
+    final key = _key.text;
+
+    if (email.isEmpty || key.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Enter email and key')));
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      // Treat KEY as password
+      final cred = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: key);
+
+      final uid = cred.user!.uid;
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+
+      if (!userDoc.exists) {
+        await FirebaseAuth.instance.signOut();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account not registered in our database.')),
+        );
+        setState(() => _loading = false);
+        return;
+      }
+
+      if (!mounted) return;
+      context.go('/streams');
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message ?? e.code)));
+    } catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _forgotKey() async {
+    final email = _email.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email first')),
+      );
+      return;
+    }
+    try {
+      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reset link sent to your email')),
+      );
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message ?? e.code)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -76,12 +142,12 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
                       _HeaderTab(
                         label: 'Public',
                         selected: false,
-                        onTap: () => context.go('/login/public'),
+                        onTap: _loading ? null : () => context.go('/login/public'),
                       ),
-                      _HeaderTab(
+                      const _HeaderTab(
                         label: 'Private',
                         selected: true,
-                        onTap: () {}, // already here
+                        onTap: null,
                       ),
                     ],
                   ),
@@ -97,6 +163,7 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
                       label: 'EMAIL',
                       prefix: Icons.person_outline,
                     ),
+                    onSubmitted: (_) => _login(),
                   ),
                   const SizedBox(height: 16),
 
@@ -118,6 +185,7 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
                         tooltip: _obscure ? 'Show' : 'Hide',
                       ),
                     ),
+                    onSubmitted: (_) => _login(),
                   ),
 
                   const SizedBox(height: 36),
@@ -137,16 +205,20 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
                           fontStyle: FontStyle.italic,
                         ),
                       ),
-                      onPressed: () => context.go('/streams'),
- // UI only
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.login),
-                          SizedBox(width: 12),
-                          Text('login'),
-                        ],
-                      ),
+                      onPressed: _loading ? null : _login,
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22, height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.login),
+                                SizedBox(width: 12),
+                                Text('login'),
+                              ],
+                            ),
                     ),
                   ),
 
@@ -155,7 +227,7 @@ class _PrivateLoginPageState extends State<PrivateLoginPage> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: () {},
+                      onPressed: _loading ? null : _forgotKey,
                       child: const Text(
                         'FORGOT KEY',
                         style: TextStyle(
@@ -184,7 +256,7 @@ class _HeaderTab extends StatelessWidget {
 
   final String label;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
